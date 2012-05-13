@@ -1,0 +1,42 @@
+name:                liblinear
+version:             0.1.0.0
+-- synopsis:            
+-- description:         
+license:             BSD3
+license-file:        LICENSE
+author:              Hideyuki Tanaka
+maintainer:          tanaka.hideyuki@gmail.com
+-- copyright:           
+category:            Web
+build-type:          Simple
+cabal-version:       >=1.8
+
+library
+  exposed-modules:     Data.Liblinear
+  other-modules:       Data.Liblinear.Internal
+
+  include-dirs:        cbits
+  install-includes:    liblinear-1.91/linear.h
+  c-sources:           cbits/liblinear-1.91/linear.cpp
+                       cbits/liblinear-1.91/tron.cpp
+                       cbits/liblinear-1.91/blas/daxpy.c
+                       cbits/liblinear-1.91/blas/ddot.c
+                       cbits/liblinear-1.91/blas/dnrm2.c
+                       cbits/liblinear-1.91/blas/dscal.c
+  extra-libraries:     stdc++
+
+  build-depends:       base == 4.5.*
+                     , bindings-DSL >= 1.0
+                     , data-default >= 0.4
+                     , vector >= 0.9.1
+                     , ghc-prim >= 0.2
+                     , generic-storable >= 0.1
+
+test-suite liblinear-test
+  type:                exitcode-stdio-1.0
+  hs-source-dirs:      test
+  main-is:             test.hs
+  build-depends:       base
+                     , hspec >= 1.1
+                     , vector
+                     , liblinear
