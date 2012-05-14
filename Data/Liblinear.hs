@@ -1,4 +1,4 @@
-{-# LANGUAGE RecordWildCards, DeriveGeneric #-}
+{-# LANGUAGE RecordWildCards, DeriveGeneric, DeriveDataTypeable #-}
 module Data.Liblinear (
   Problem(..),
   Example(..),
@@ -9,20 +9,24 @@ module Data.Liblinear (
   def,
   ) where
 
-import qualified Data.Vector as V
-import qualified Data.Vector.Storable as VS
-import qualified Data.Vector.Storable.Mutable as VSM
-
 import Control.Applicative
+import Control.Exception
+import Control.Monad
+import Data.Data
 import Data.Default
 import Data.Monoid
 import Foreign.C
+import Foreign.ForeignPtr
 import Foreign.Marshal.Utils
 import Foreign.Ptr
 import Foreign.Storable
 import Foreign.Storable.Generic
 import GHC.Generics
 import System.IO
+
+import qualified Data.Vector as V
+import qualified Data.Vector.Storable as VS
+import qualified Data.Vector.Storable.Mutable as VSM
 
 import Data.Liblinear.Internal
 
@@ -97,11 +101,75 @@ train Problem {..} Parameter {..} = do
     Model <$> c'train pprob pparam
 
 predict :: Model -> VS.Vector Feature -> IO Double
-predict model features =
+predict (Model pmodel) features =
   VS.unsafeWith (features <> VS.singleton (Feature (-1) 0)) $ \pfeat ->
-  realToFrac <$> c'predict (unModel model) (castPtr pfeat)
+  realToFrac <$> c'predict pmodel (castPtr pfeat)
 
--- predictValues :: Model -> VS.Vector Feature -> IO Double
+predictValues :: Model -> VS.Vector Feature -> IO (Double, VS.Vector Double)
+predictValues (Model pmodel) features = do
+  nr_class <- peek $ p'model'nr_class pmodel
+  solver_type <- peek $ p'parameter'solver_type $ p'model'param pmodel
+  let nr_w | nr_class == 2 && solver_type /= c'MCSVM_CS = 1
+           | otherwise = nr_class
+  ptr <- mallocForeignPtrArray (fromIntegral nr_w)
+  VS.unsafeWith (features <> VS.singleton (Feature (-1) 0)) $ \pfeat -> do
+    ret <- withForeignPtr ptr $ c'predict_values pmodel (castPtr pfeat)
+    let vect = VS.unsafeFromForeignPtr0 (castForeignPtr ptr) $ fromIntegral nr_w
+    return (realToFrac ret, vect)
+
+predictProbability :: Model -> VS.Vector Feature -> IO (Double, VS.Vector Double)
+predictProbability (Model pmodel) features = do
+  nr_class <- peek $ p'model'nr_class pmodel
+  ptr <- mallocForeignPtrArray (fromIntegral nr_class)
+  VS.unsafeWith (features <> VS.singleton (Feature (-1) 0)) $ \pfeat -> do
+    ret <- withForeignPtr ptr $ c'predict_probability pmodel (castPtr pfeat)
+    let vect = VS.unsafeFromForeignPtr0 (castForeignPtr ptr) $ fromIntegral nr_class
+    return (realToFrac ret, vect)
+
+saveModel :: FilePath -> Model -> IO ()
+saveModel path (Model pmodel) =  do
+  withCString path $ \ppath -> do
+    throwIfError "saveModel failed" $ c'save_model ppath pmodel
+
+loadModel :: FilePath -> IO Model
+loadModel path = do
+  withCString path $ \ppath -> do
+    Model <$> throwIfNull "loadModel failed" (c'load_model ppath)
+
+{-
+void cross_validation(const struct problem *prob, const struct parameter *param, int nr_fold, double *target);
+
+int get_nr_feature(const struct model *model_);
+int get_nr_class(const struct model *model_);
+void get_labels(const struct model *model_, int* label);
+
+void free_model_content(struct model *model_ptr);
+void free_and_destroy_model(struct model **model_ptr_ptr);
+void destroy_param(struct parameter *param);
+
+const char *check_parameter(const struct problem *prob, const struct parameter *param);
+int check_probability_model(const struct model *model);
+void set_print_string_function(void (*print_func) (const char*));
+-}
+
+--
+
+data LiblinearError
+  = LiblinearError String
+  deriving (Show, Data, Typeable)
+
+instance Exception LiblinearError
+
+throwIfError :: String -> IO CInt -> IO ()
+throwIfError msg m = do
+  c <- m
+  when (c /= 0) $ throwIO $ LiblinearError msg
+
+throwIfNull :: String -> IO (Ptr a) -> IO (Ptr a)
+throwIfNull msg m = do
+  ptr <- m
+  when (ptr == nullPtr) $ throwIO $ LiblinearError msg
+  return ptr
 
 withManyV :: (Storable e)
           => (VS.Vector e -> (Ptr e -> IO res) -> IO res)
