@@ -1,9 +1,10 @@
 {-# LANGUAGE RecordWildCards, DeriveGeneric #-}
 module Data.Liblinear (
   Problem(..),
-  Sample(..),
+  Example(..),
   Feature(..),
   Parameter(..),
+  Model,
   train,
   def,
   ) where
@@ -14,7 +15,7 @@ import qualified Data.Vector.Storable.Mutable as VSM
 
 import Control.Applicative
 import Data.Default
-import Data.Liblinear.Internal
+import Data.Monoid
 import Foreign.C
 import Foreign.Marshal.Utils
 import Foreign.Ptr
@@ -23,16 +24,18 @@ import Foreign.Storable.Generic
 import GHC.Generics
 import System.IO
 
+import Data.Liblinear.Internal
+
 data Problem
   = Problem
-    { problemData :: V.Vector Sample
+    { problemData :: V.Vector Example
     , problemBias :: Double
     }
 
-data Sample
-  = Sample
-    { sampleLabel    :: {-# UNPACK #-} !CDouble
-    , sampleFeatures :: {-# UNPACK #-} !(VS.Vector Feature)
+data Example
+  = Example
+    { exampleLabel    :: {-# UNPACK #-} !CDouble
+    , exampleFeatures :: {-# UNPACK #-} !(VS.Vector Feature)
     }
 
 data Feature
@@ -84,14 +87,21 @@ newtype Model = Model { unModel :: Ptr C'model }
 train :: Problem -> Parameter -> IO Model
 train Problem {..} Parameter {..} = do
   let l = fromIntegral . V.length $ problemData
-      n = fromIntegral . V.foldl max 0 . V.map (VS.foldl max 0 . VS.map featureIndex . sampleFeatures) $ problemData
-  VS.unsafeWith (V.convert $ V.map sampleLabel problemData) $ \plabels -> do
-  withManyV VS.unsafeWith (V.map sampleFeatures problemData) $ \pfeatures -> do
-  VS.unsafeWith (VS.map weightLabel paramWeights) $ \pwlabel -> do
-  VS.unsafeWith (VS.map weightValue paramWeights) $ \pwvalue -> do
-  with (C'problem l n plabels (castPtr pfeatures) (realToFrac problemBias)) $ \pprob -> do
-  with (C'parameter (fromIntegral paramSolverType) (realToFrac paramEps) (realToFrac paramC) (fromIntegral $ VS.length paramWeights) pwlabel pwvalue (realToFrac paramP)) $ \pparam -> do
+      n = fromIntegral . V.foldl max 0 . V.map (VS.foldl max 0 . VS.map featureIndex . exampleFeatures) $ problemData
+  VS.unsafeWith (V.convert $ V.map exampleLabel problemData) $ \plabels ->
+    withManyV VS.unsafeWith (V.map exampleFeatures problemData) $ \pfeatures ->
+    VS.unsafeWith (VS.map weightLabel paramWeights) $ \pwlabel ->
+    VS.unsafeWith (VS.map weightValue paramWeights) $ \pwvalue ->
+    with (C'problem l n plabels (castPtr pfeatures) (realToFrac problemBias)) $ \pprob ->
+    with (C'parameter (fromIntegral paramSolverType) (realToFrac paramEps) (realToFrac paramC) (fromIntegral $ VS.length paramWeights) pwlabel pwvalue (realToFrac paramP)) $ \pparam ->
     Model <$> c'train pprob pparam
+
+predict :: Model -> VS.Vector Feature -> IO Double
+predict model features =
+  VS.unsafeWith (features <> VS.singleton (Feature (-1) 0)) $ \pfeat ->
+  realToFrac <$> c'predict (unModel model) (castPtr pfeat)
+
+-- predictValues :: Model -> VS.Vector Feature -> IO Double
 
 withManyV :: (Storable e)
           => (VS.Vector e -> (Ptr e -> IO res) -> IO res)
