@@ -136,9 +136,13 @@ loadModel path = do
   withCString path $ \ppath -> do
     Model <$> throwIfNull "loadModel failed" (c'load_model ppath)
 
-{-
-void cross_validation(const struct problem *prob, const struct parameter *param, int nr_fold, double *target);
+crossValidation :: Problem -> Parameter -> Int -> IO [Double]
+crossValidation (Problem prob) (Parameter param) numFold = do
+  allocaArray foldNum $ \ptr -> do
+    c'cross_validation prob param (fromIntegral foldNum) ptr
+    map realToFrac <$> peekArray numFold ptr
 
+{-
 int get_nr_feature(const struct model *model_);
 int get_nr_class(const struct model *model_);
 void get_labels(const struct model *model_, int* label);
